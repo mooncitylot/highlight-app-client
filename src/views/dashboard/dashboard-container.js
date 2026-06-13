@@ -8,7 +8,6 @@ class DashboardContainer extends LitElement {
     return html`
       <div class="container">
         <div class="dashboard-card">
-          <h1>Dashboard</h1>
           <button @click=${() => go(routes.HIGHLIGHTER.path)}>
             Highlighter
           </button>

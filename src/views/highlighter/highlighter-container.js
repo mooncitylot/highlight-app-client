@@ -11,9 +11,9 @@ class HighlighterContainer extends LitElement {
       progress: { type: Number },
       scanning: { type: Boolean },
       cameraActive: { type: Boolean },
-      capturedUrl: { type: String },
-      cropHeight: { type: Number },
-      cropWidth: { type: Number },
+      bandHeight: { type: Number },
+      shareSupported: { type: Boolean },
+      copied: { type: Boolean },
     };
   }
 
@@ -23,18 +23,24 @@ class HighlighterContainer extends LitElement {
     this.progress = 0;
     this.scanning = false;
     this.cameraActive = false;
-    this.capturedUrl = null;
     this._stream = null;
-    this.cropHeight = 120;
-    this.cropWidth = 320;
+    this.bandHeight = 64;
+    this.shareSupported = typeof navigator !== "undefined" && !!navigator.share;
+    this.copied = false;
   }
 
   async _startCamera() {
-    this.capturedUrl = null;
     this.ocrText = "";
-    this._stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" },
-    });
+    this.copied = false;
+    try {
+      this._stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+      });
+    } catch (err) {
+      console.error(err);
+      alert("Camera access denied or unavailable.");
+      return;
+    }
     this.cameraActive = true;
     await this.updateComplete;
     const video = this.shadowRoot.querySelector("video");
@@ -49,19 +55,31 @@ class HighlighterContainer extends LitElement {
 
   async _capture() {
     const video = this.shadowRoot.querySelector("video");
-    const scaleX = video.videoWidth / video.clientWidth;
-    const scaleY = video.videoHeight / video.clientHeight;
-    const sx = ((video.clientWidth - this.cropWidth) / 2) * scaleX;
-    const sy = ((video.clientHeight - this.cropHeight) / 2) * scaleY;
-    const sw = this.cropWidth * scaleX;
-    const sh = this.cropHeight * scaleY;
+
+    // Camera uses object-fit: cover — recompute the visible source rect so the
+    // crop band maps to what the user actually sees.
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const cw = video.clientWidth;
+    const ch = video.clientHeight;
+    const coverScale = Math.max(cw / vw, ch / vh);
+    const visW = cw / coverScale; // source px visible horizontally
+    const visH = ch / coverScale; // source px visible vertically
+    const offX = (vw - visW) / 2;
+    const offY = (vh - visH) / 2;
+
+    const bandSrcH = (this.bandHeight / ch) * visH;
+    const sx = offX;
+    const sy = offY + (visH - bandSrcH) / 2;
+    const sw = visW;
+    const sh = bandSrcH;
+
     const canvas = document.createElement("canvas");
     canvas.width = sw;
     canvas.height = sh;
     canvas.getContext("2d").drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
     this._stopCamera();
 
-    this.capturedUrl = canvas.toDataURL("image/png");
     this.scanning = true;
     this.progress = 0;
 
@@ -73,8 +91,40 @@ class HighlighterContainer extends LitElement {
       },
     });
 
-    this.ocrText = result.data.text;
+    this.ocrText = result.data.text.trim();
     this.scanning = false;
+  }
+
+  async _share() {
+    const text = this._currentText();
+    if (!text) return;
+    try {
+      await navigator.share({ text });
+    } catch (err) {
+      if (err?.name !== "AbortError") console.error(err);
+    }
+  }
+
+  async _copy() {
+    const text = this._currentText();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      this.copied = true;
+      setTimeout(() => (this.copied = false), 1500);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  _currentText() {
+    const ta = this.shadowRoot.querySelector("textarea");
+    return ta ? ta.value.trim() : this.ocrText.trim();
+  }
+
+  _reset() {
+    this.ocrText = "";
+    this.copied = false;
   }
 
   disconnectedCallback() {
@@ -84,59 +134,105 @@ class HighlighterContainer extends LitElement {
 
   render() {
     return html`
-      <div class="highlighter-container">
-        <h3>OCR Scanner</h3>
-        <button @click=${() => go(routes.DASHBOARD.path)}>Dashboard</button>
-        ${!this.cameraActive && !this.capturedUrl
-          ? html`<button @click=${this._startCamera}>Open Camera</button>`
+      <div class="screen">
+        ${this._renderTopBar()} ${this.cameraActive ? this._renderCamera() : ""}
+        ${this.scanning ? this._renderScanning() : ""}
+        ${this.ocrText && !this.cameraActive && !this.scanning
+          ? this._renderResult()
           : ""}
-        ${this.cameraActive
-          ? html`
-              <div class="camera-wrapper">
-                <video autoplay playsinline></video>
-                <div
-                  class="crop-overlay"
-                  style="width:${this.cropWidth}px;height:${this.cropHeight}px"
-                ></div>
-              </div>
-              <div class="crop-controls">
-                <label class="slider-label">
-                  <span>W: ${this.cropWidth}px</span>
-                  <input
-                    type="range"
-                    min="50"
-                    max="1280"
-                    .value=${this.cropWidth}
-                    @input=${(e) => (this.cropWidth = Number(e.target.value))}
-                  />
-                </label>
-                <label class="slider-label">
-                  <span>H: ${this.cropHeight}px</span>
-                  <input
-                    type="range"
-                    min="20"
-                    max="720"
-                    .value=${this.cropHeight}
-                    @input=${(e) => (this.cropHeight = Number(e.target.value))}
-                  />
-                </label>
-              </div>
-              <div class="controls">
-                <button @click=${this._capture}>Capture</button>
-                <button @click=${this._stopCamera}>Cancel</button>
-              </div>
-            `
+        ${!this.cameraActive && !this.scanning && !this.ocrText
+          ? this._renderIdle()
           : ""}
-        ${this.capturedUrl
-          ? html`
-              <img class="preview" src=${this.capturedUrl} alt="captured" />
-              <button @click=${this._startCamera}>Retake</button>
-            `
-          : ""}
-        ${this.scanning
-          ? html`<p class="status">Scanning... ${this.progress}%</p>`
-          : ""}
-        ${this.ocrText ? html`<pre class="result">${this.ocrText}</pre>` : ""}
+      </div>
+    `;
+  }
+
+  _renderTopBar() {
+    return html`
+      <div class="topbar">
+        <button class="icon-btn" @click=${() => go(routes.DASHBOARD.path)}>
+          ‹ Back
+        </button>
+        <span class="title">Highlighter</span>
+        <span class="spacer"></span>
+      </div>
+    `;
+  }
+
+  _renderIdle() {
+    return html`
+      <div class="idle">
+        <h2>Scan a line</h2>
+        <p>Point your camera at a line of text and capture it.</p>
+        <button class="primary big" @click=${this._startCamera}>
+          Open Camera
+        </button>
+      </div>
+    `;
+  }
+
+  _renderCamera() {
+    return html`
+      <div class="camera-stage">
+        <video autoplay playsinline muted></video>
+        <div class="mask">
+          <div class="mask-fill"></div>
+          <div class="band" style="height:${this.bandHeight}px"></div>
+          <div class="mask-fill"></div>
+        </div>
+        <div class="hint">Line up the text inside the highlight</div>
+      </div>
+
+      <div class="bottom-bar">
+        <label class="thickness">
+          <input
+            type="range"
+            min="28"
+            max="160"
+            .value=${this.bandHeight}
+            @input=${(e) => (this.bandHeight = Number(e.target.value))}
+          />
+        </label>
+        <div class="shutter-row">
+          <button class="ghost" @click=${this._stopCamera}>Cancel</button>
+          <button
+            class="shutter"
+            aria-label="Capture"
+            @click=${this._capture}
+          ></button>
+          <span class="ghost-spacer"></span>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderScanning() {
+    return html`
+      <div class="scanning">
+        <div class="spinner"></div>
+        <p>Reading text… ${this.progress}%</p>
+      </div>
+    `;
+  }
+
+  _renderResult() {
+    return html`
+      <div class="result">
+        <label class="field-label">Scanned text — tap to edit</label>
+        <textarea .value=${this.ocrText} rows="6"></textarea>
+        <div class="result-actions">
+          ${this.shareSupported
+            ? html`<button class="primary big" @click=${this._share}>
+                Save to…
+              </button>`
+            : ""}
+          <button class="secondary big" @click=${this._copy}>
+            ${this.copied ? "Copied ✓" : "Copy"}
+          </button>
+        </div>
+        <button class="ghost full" @click=${this._startCamera}>
+          Scan again
+        </button>
       </div>
     `;
   }
@@ -145,70 +241,240 @@ class HighlighterContainer extends LitElement {
     return [
       globalStyles,
       css`
-        .preview {
-          max-width: 100%;
+        :host {
           display: block;
-          margin: 1em 0;
-          border-radius: 4px;
+          height: 100%;
         }
-        .camera-wrapper {
-          position: relative;
-          display: inline-block;
-          line-height: 0;
-          margin: 1em 0 0;
-        }
-        video {
-          display: block;
-          width: 720px;
-          height: 320px;
-          border-radius: 4px;
-        }
-        .crop-overlay {
-          position: absolute;
-          top: 50%;
-          left: 50%;
-          transform: translate(-50%, -50%);
-          border: 2px solid red;
-          pointer-events: none;
-          box-sizing: border-box;
-        }
-        .crop-controls {
+        .screen {
           display: flex;
           flex-direction: column;
-          gap: 0.4em;
-          margin: 0.5em 0 0.5em;
-          font-size: 0.85em;
+          height: 100%;
+          background: var(--app-white);
         }
-        .slider-label {
+
+        /* Top bar */
+        .topbar {
           display: flex;
           align-items: center;
-          gap: 0.5em;
+          gap: 8px;
+          padding: 10px 12px;
+          padding-top: max(10px, env(safe-area-inset-top));
+          background: var(--app-primary-color);
+          color: var(--app-primary-font-color);
         }
-        .slider-label span {
-          min-width: 80px;
+        .topbar .title {
+          font-weight: 600;
+          font-size: 17px;
         }
-        .slider-label input[type="range"] {
+        .topbar .spacer {
           flex: 1;
         }
-        .controls {
+        .icon-btn {
+          background: transparent;
+          color: var(--app-primary-font-color);
+          border: none;
+          padding: 6px 8px;
+          font-size: 16px;
+        }
+        .icon-btn:hover {
+          opacity: 0.85;
+        }
+
+        /* Idle */
+        .idle {
+          flex: 1;
           display: flex;
-          gap: 0.5em;
-          margin-bottom: 1em;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          text-align: center;
+          padding: 24px;
+          gap: 8px;
         }
-        button {
-          padding: 0.5em 1em;
-          cursor: pointer;
+        .idle-art {
+          font-size: 56px;
         }
-        .status {
-          color: #666;
-          font-style: italic;
+        .idle p {
+          color: var(--app-grey);
+          max-width: 260px;
         }
+
+        /* Camera */
+        .camera-stage {
+          position: relative;
+          flex: 1;
+          background: #000;
+          overflow: hidden;
+        }
+        video {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+        .mask {
+          position: absolute;
+          inset: 0;
+          display: flex;
+          flex-direction: column;
+          pointer-events: none;
+        }
+        .mask-fill {
+          flex: 1;
+          background: rgba(0, 0, 0, 0.5);
+        }
+        .band {
+          width: 100%;
+          background: rgba(255, 225, 70, 0.28);
+          border-top: 2px solid rgba(255, 213, 0, 0.95);
+          border-bottom: 2px solid rgba(255, 213, 0, 0.95);
+        }
+        .hint {
+          position: absolute;
+          left: 0;
+          right: 0;
+          bottom: 12px;
+          text-align: center;
+          color: #fff;
+          font-size: 13px;
+          text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+          pointer-events: none;
+        }
+
+        /* Bottom controls */
+        .bottom-bar {
+          background: var(--app-primary-color);
+          padding: 12px 16px;
+          padding-bottom: max(12px, env(safe-area-inset-bottom));
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .thickness {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          color: var(--app-primary-font-color);
+          font-size: 13px;
+          margin: 0;
+        }
+        .thickness span {
+          min-width: 72px;
+        }
+        .thickness input[type="range"] {
+          flex: 1;
+          margin: 0;
+          accent-color: #ffd500;
+        }
+        .shutter-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+        .shutter {
+          width: 66px;
+          height: 66px;
+          border-radius: 50%;
+          background: #fff;
+          border: 4px solid rgba(255, 255, 255, 0.55);
+          padding: 0;
+          box-shadow: 0 0 0 2px var(--app-primary-color) inset;
+        }
+        .shutter:active {
+          transform: scale(0.94);
+        }
+        .ghost,
+        .ghost-spacer {
+          width: 72px;
+          text-align: center;
+        }
+        .ghost {
+          background: transparent;
+          color: var(--app-primary-font-color);
+          border: none;
+          padding: 8px;
+        }
+
+        /* Scanning */
+        .scanning {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 16px;
+          color: var(--app-grey);
+        }
+        .spinner {
+          width: 44px;
+          height: 44px;
+          border: 4px solid var(--app-light-grey);
+          border-top-color: var(--app-primary-color);
+          border-radius: 50%;
+          animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        /* Result */
         .result {
-          white-space: pre-wrap;
-          background: #f4f4f4;
-          padding: 1em;
-          border-radius: 4px;
-          font-size: 0.9em;
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          padding: 16px;
+          padding-bottom: max(16px, env(safe-area-inset-bottom));
+          gap: 12px;
+          overflow: auto;
+        }
+        .field-label {
+          margin: 0;
+          font-size: 13px;
+          color: var(--app-grey);
+          font-weight: 500;
+        }
+        textarea {
+          width: 100%;
+          flex: 0 0 auto;
+          min-height: 140px;
+          resize: vertical;
+          padding: 14px;
+          border: 1px solid var(--app-light-grey);
+          border-radius: var(--app-border-radius);
+          font-size: 17px;
+          line-height: 1.5;
+          font-family: var(--primary-font-family);
+          background: #fff;
+        }
+        textarea:focus {
+          outline: none;
+          border-color: var(--app-primary-color);
+        }
+        .result-actions {
+          display: flex;
+          gap: 10px;
+        }
+        .result-actions button {
+          flex: 1;
+        }
+
+        /* Shared button sizing */
+        .primary {
+          background-color: var(--app-primary-color);
+          color: #fff;
+        }
+        .big {
+          padding: 14px 20px;
+          font-size: 16px;
+          border-radius: var(--app-border-radius);
+        }
+        .full {
+          width: 100%;
+        }
+        button.ghost.full {
+          color: var(--app-grey);
         }
       `,
     ];

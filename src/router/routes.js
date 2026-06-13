@@ -13,7 +13,7 @@ export const routes = {
     componentPath: "highlighter/highlighter-container",
     componentName: "highlighter-container",
     showNav: true,
-    showHeader: true,
+    showHeader: false,
   },
 };
 

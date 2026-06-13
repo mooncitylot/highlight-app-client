@@ -37,7 +37,7 @@ export default (SuperClass) => {
 
       if (!routeObj) return go(routes.DASHBOARD.path);
 
-      this.showHeader = true;
+      this.showHeader = routeObj.showHeader !== false;
 
       await componentLoader(routeObj.componentPath).catch((err) => {
         console.error(err);
