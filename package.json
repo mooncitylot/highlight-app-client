@@ -1,0 +1,24 @@
+{
+  "name": "starter-client",
+  "version": "1.0.0",
+  "description": "Starter Client Application with Authentication",
+  "main": "index.js",
+  "scripts": {
+    "start": "webpack serve --mode development",
+    "build": "webpack --mode production"
+  },
+  "type": "module",
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "clean-webpack-plugin": "^4.0.0",
+    "dotenv": "^16.0.3",
+    "html-webpack-plugin": "^5.5.0",
+    "lit": "^2.7.0",
+    "path-to-regexp": "^6.2.1",
+    "tesseract.js": "^7.0.0",
+    "webpack": "^5.76.2",
+    "webpack-cli": "^5.0.1",
+    "webpack-dev-server": "^4.13.1"
+  }
+}
