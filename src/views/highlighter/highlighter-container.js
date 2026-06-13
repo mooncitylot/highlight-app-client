@@ -12,6 +12,7 @@ class HighlighterContainer extends LitElement {
       scanning: { type: Boolean },
       cameraActive: { type: Boolean },
       bandHeight: { type: Number },
+      bandWidth: { type: Number },
       shareSupported: { type: Boolean },
       copied: { type: Boolean },
     };
@@ -25,6 +26,7 @@ class HighlighterContainer extends LitElement {
     this.cameraActive = false;
     this._stream = null;
     this.bandHeight = 64;
+    this.bandWidth = 90; // percent of viewport width
     this.shareSupported = typeof navigator !== "undefined" && !!navigator.share;
     this.copied = false;
   }
@@ -69,9 +71,10 @@ class HighlighterContainer extends LitElement {
     const offY = (vh - visH) / 2;
 
     const bandSrcH = (this.bandHeight / ch) * visH;
-    const sx = offX;
+    const bandSrcW = (this.bandWidth / 100) * visW;
+    const sx = offX + (visW - bandSrcW) / 2;
     const sy = offY + (visH - bandSrcH) / 2;
-    const sw = visW;
+    const sw = bandSrcW;
     const sh = bandSrcH;
 
     const canvas = document.createElement("canvas");
@@ -177,20 +180,35 @@ class HighlighterContainer extends LitElement {
         <video autoplay playsinline muted></video>
         <div class="mask">
           <div class="mask-fill"></div>
-          <div class="band" style="height:${this.bandHeight}px"></div>
+          <div class="band-row" style="height:${this.bandHeight}px">
+            <div class="mask-fill side"></div>
+            <div class="band" style="width:${this.bandWidth}%"></div>
+            <div class="mask-fill side"></div>
+          </div>
           <div class="mask-fill"></div>
         </div>
         <div class="hint">Line up the text inside the highlight</div>
       </div>
 
       <div class="bottom-bar">
-        <label class="thickness">
+        <label class="slider">
+          <span>Height</span>
           <input
             type="range"
             min="28"
             max="160"
             .value=${this.bandHeight}
             @input=${(e) => (this.bandHeight = Number(e.target.value))}
+          />
+        </label>
+        <label class="slider">
+          <span>Width</span>
+          <input
+            type="range"
+            min="20"
+            max="100"
+            .value=${this.bandWidth}
+            @input=${(e) => (this.bandWidth = Number(e.target.value))}
           />
         </label>
         <div class="shutter-row">
@@ -323,11 +341,18 @@ class HighlighterContainer extends LitElement {
           flex: 1;
           background: rgba(0, 0, 0, 0.5);
         }
-        .band {
+        .band-row {
+          display: flex;
           width: 100%;
+        }
+        .mask-fill.side {
+          flex: 1;
+          height: 100%;
+        }
+        .band {
+          height: 100%;
           background: rgba(255, 225, 70, 0.28);
-          border-top: 2px solid rgba(255, 213, 0, 0.95);
-          border-bottom: 2px solid rgba(255, 213, 0, 0.95);
+          border: 2px solid rgba(255, 213, 0, 0.95);
         }
         .hint {
           position: absolute;
@@ -348,9 +373,9 @@ class HighlighterContainer extends LitElement {
           padding-bottom: max(12px, env(safe-area-inset-bottom));
           display: flex;
           flex-direction: column;
-          gap: 12px;
+          gap: 10px;
         }
-        .thickness {
+        .slider {
           display: flex;
           align-items: center;
           gap: 12px;
@@ -358,10 +383,10 @@ class HighlighterContainer extends LitElement {
           font-size: 13px;
           margin: 0;
         }
-        .thickness span {
-          min-width: 72px;
+        .slider span {
+          min-width: 56px;
         }
-        .thickness input[type="range"] {
+        .slider input[type="range"] {
           flex: 1;
           margin: 0;
           accent-color: #ffd500;

@@ -1,0 +1,26 @@
+{
+  "name": "Highlighter — scan text from books",
+  "short_name": "Highlighter",
+  "description": "A digital highlighter for physical books. Scan a line of text and save it to your notes.",
+  "start_url": "/highlighter",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#292929",
+  "theme_color": "#292929",
+  "categories": ["productivity", "utilities", "education"],
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

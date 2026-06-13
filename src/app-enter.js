@@ -14,7 +14,7 @@ class AppEnterElement extends routerMixin(LitElement) {
 
   render() {
     return html`
-      ${this.showHeader ? html`<header><h1>Starter App</h1></header>` : null}
+      ${this.showHeader ? html`<header><h1>Highlighter</h1></header>` : null}
       <slot></slot>
     `;
   }

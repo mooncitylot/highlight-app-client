@@ -1,6 +1,7 @@
 import webpack from "webpack";
 import HtmlWebpackPlugin from "html-webpack-plugin";
 import { CleanWebpackPlugin } from "clean-webpack-plugin";
+import CopyWebpackPlugin from "copy-webpack-plugin";
 import path from "path";
 import { fileURLToPath } from "url";
 import * as dotenv from "dotenv";
@@ -75,6 +76,9 @@ export default (env, { mode }) => {
       }),
       new HtmlWebpackPlugin({
         template: "index.html",
+      }),
+      new CopyWebpackPlugin({
+        patterns: [{ from: path.resolve(__dirname, "public"), to: "." }],
       }),
     ],
   };
