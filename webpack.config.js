@@ -78,7 +78,18 @@ export default (env, { mode }) => {
         template: "index.html",
       }),
       new CopyWebpackPlugin({
-        patterns: [{ from: path.resolve(__dirname, "public"), to: "." }],
+        patterns: [
+          { from: path.resolve(__dirname, "public"), to: "." },
+          // Hunspell dictionary for the OCR spell-check, fetched at runtime.
+          {
+            from: path.resolve(__dirname, "node_modules/dictionary-en/index.aff"),
+            to: "dict/index.aff",
+          },
+          {
+            from: path.resolve(__dirname, "node_modules/dictionary-en/index.dic"),
+            to: "dict/index.dic",
+          },
+        ],
       }),
     ],
   };

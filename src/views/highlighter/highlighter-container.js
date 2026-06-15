@@ -3,6 +3,7 @@ import Tesseract from "tesseract.js";
 import { go } from "../../router/router-mixin.js";
 import { routes } from "../../router/routes.js";
 import globalStyles from "../../styles/global-styles.js";
+import { spellcheckText } from "./spellcheck.js";
 
 class HighlighterContainer extends LitElement {
   static get properties() {
@@ -10,11 +11,15 @@ class HighlighterContainer extends LitElement {
       ocrText: { type: String },
       progress: { type: Number },
       scanning: { type: Boolean },
+      checking: { type: Boolean },
       cameraActive: { type: Boolean },
       bandHeight: { type: Number },
       bandWidth: { type: Number },
       shareSupported: { type: Boolean },
       copied: { type: Boolean },
+      tokens: { type: Array },
+      fixedCount: { type: Number },
+      activeSuspect: { type: Number },
     };
   }
 
@@ -23,7 +28,11 @@ class HighlighterContainer extends LitElement {
     this.ocrText = "";
     this.progress = 0;
     this.scanning = false;
+    this.checking = false;
     this.cameraActive = false;
+    this.tokens = [];
+    this.fixedCount = 0;
+    this.activeSuspect = -1;
     this._stream = null;
     this.bandHeight = 64;
     this.bandWidth = 90; // percent of viewport width
@@ -96,6 +105,34 @@ class HighlighterContainer extends LitElement {
 
     this.ocrText = result.data.text.trim();
     this.scanning = false;
+
+    await this._runSpellcheck(result.data.words);
+  }
+
+  // Run OCR-aware spell-check over the scanned text. Auto-fixes confident errors
+  // and flags the rest. Falls back to the raw text if the dictionary can't load.
+  async _runSpellcheck(words) {
+    if (!this.ocrText) return;
+    this.activeSuspect = -1;
+    this.checking = true;
+    try {
+      const confidenceByWord = {};
+      for (const w of words || []) {
+        if (w?.text) confidenceByWord[w.text.toLowerCase()] = w.confidence;
+      }
+      const { tokens, fixedCount } = await spellcheckText(
+        this.ocrText,
+        confidenceByWord,
+      );
+      this.tokens = tokens;
+      this.fixedCount = fixedCount;
+    } catch (err) {
+      console.error("Spell-check unavailable:", err);
+      this.tokens = []; // degrade to plain editable text
+      this.fixedCount = 0;
+    } finally {
+      this.checking = false;
+    }
   }
 
   async _share() {
@@ -121,13 +158,47 @@ class HighlighterContainer extends LitElement {
   }
 
   _currentText() {
+    const editor = this.shadowRoot.querySelector(".editor");
+    if (editor) return editor.textContent.trim();
     const ta = this.shadowRoot.querySelector("textarea");
     return ta ? ta.value.trim() : this.ocrText.trim();
   }
 
   _reset() {
     this.ocrText = "";
+    this.tokens = [];
+    this.fixedCount = 0;
+    this.activeSuspect = -1;
     this.copied = false;
+  }
+
+  _openCorrection(index) {
+    this.activeSuspect = this.activeSuspect === index ? -1 : index;
+  }
+
+  // Apply a chosen word to the flagged token and mark it resolved.
+  _applyCorrection(index, word) {
+    const t = this.tokens[index];
+    const next = this.tokens.slice();
+    next[index] = { type: "ok", text: (t.lead || "") + word + (t.trail || "") };
+    this.tokens = next;
+    this.activeSuspect = -1;
+  }
+
+  // Keep the original scanned word (dismiss the flag / revert an auto-fix).
+  _keepOriginal(index) {
+    const t = this.tokens[index];
+    const text = t.original ?? t.text;
+    const next = this.tokens.slice();
+    next[index] = { type: "ok", text };
+    this.tokens = next;
+    this.activeSuspect = -1;
+  }
+
+  // Re-run spell-check over the user's current (possibly hand-edited) text.
+  async _recheck() {
+    this.ocrText = this._currentText();
+    await this._runSpellcheck(null);
   }
 
   disconnectedCallback() {
@@ -234,10 +305,34 @@ class HighlighterContainer extends LitElement {
   }
 
   _renderResult() {
+    const hasHighlights = this.tokens && this.tokens.length > 0;
+    const suspects = hasHighlights
+      ? this.tokens.filter((t) => t.type === "suspect").length
+      : 0;
     return html`
       <div class="result">
         <label class="field-label">Scanned text — tap to edit</label>
-        <textarea .value=${this.ocrText} rows="6"></textarea>
+
+        ${this.checking
+          ? html`<div class="check-note">Checking spelling…</div>`
+          : ""}
+        ${this.fixedCount > 0
+          ? html`<div class="fix-banner">
+              ✦ Auto-fixed ${this.fixedCount}
+              word${this.fixedCount === 1 ? "" : "s"}. ${suspects > 0
+                ? html`${suspects} more flagged — tap to fix.`
+                : ""}
+            </div>`
+          : ""}
+
+        ${hasHighlights
+          ? this._renderEditor()
+          : html`<textarea .value=${this.ocrText} rows="6"></textarea>`}
+
+        ${this.activeSuspect >= 0 && this.tokens[this.activeSuspect]
+          ? this._renderCorrectionPanel()
+          : ""}
+
         <div class="result-actions">
           ${this.shareSupported
             ? html`<button class="primary big" @click=${this._share}>
@@ -248,9 +343,70 @@ class HighlighterContainer extends LitElement {
             ${this.copied ? "Copied ✓" : "Copy"}
           </button>
         </div>
-        <button class="ghost full" @click=${this._startCamera}>
-          Scan again
-        </button>
+        <div class="result-actions">
+          <button class="ghost full" @click=${this._recheck}>
+            Re-check spelling
+          </button>
+          <button class="ghost full" @click=${this._startCamera}>
+            Scan again
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  // contenteditable text where corrected/suspect words are marked inline.
+  _renderEditor() {
+    return html`
+      <div class="editor" contenteditable="true" spellcheck="false">
+        ${this.tokens.map((t, i) => {
+          if (t.type === "space") return t.text;
+          if (t.type === "fixed") {
+            return html`<span
+              class="tok fixed"
+              title="Was: ${t.original}"
+              @click=${() => this._openCorrection(i)}
+              >${t.text}</span
+            >`;
+          }
+          if (t.type === "suspect") {
+            return html`<span
+              class="tok suspect ${this.activeSuspect === i ? "active" : ""}"
+              @click=${() => this._openCorrection(i)}
+              >${t.text}</span
+            >`;
+          }
+          return html`<span class="tok">${t.text}</span>`;
+        })}
+      </div>
+    `;
+  }
+
+  _renderCorrectionPanel() {
+    const i = this.activeSuspect;
+    const t = this.tokens[i];
+    const original = t.original ?? t.text;
+    return html`
+      <div class="correct-panel">
+        <div class="correct-head">
+          <span>Replace “${(t.core ?? original).trim()}”</span>
+          <button class="icon-btn dark" @click=${() => (this.activeSuspect = -1)}>
+            ✕
+          </button>
+        </div>
+        <div class="suggest-row">
+          ${(t.suggestions || []).map(
+            (s) => html`<button
+              class="chip"
+              @click=${() => this._applyCorrection(i, s)}
+            >
+              ${s}
+            </button>`,
+          )}
+          <button class="chip keep" @click=${() => this._keepOriginal(i)}>
+            Keep “${original.trim()}”
+          </button>
+        </div>
       </div>
     `;
   }
@@ -476,6 +632,101 @@ class HighlighterContainer extends LitElement {
         textarea:focus {
           outline: none;
           border-color: var(--app-primary-color);
+        }
+
+        /* Spell-check status */
+        .check-note {
+          font-size: 13px;
+          color: var(--app-grey);
+        }
+        .fix-banner {
+          font-size: 13px;
+          line-height: 1.4;
+          color: #1a7f37;
+          background: #eafaef;
+          border: 1px solid #b7e4c7;
+          border-radius: var(--app-border-radius);
+          padding: 8px 12px;
+        }
+
+        /* Highlight editor */
+        .editor {
+          width: 100%;
+          min-height: 140px;
+          padding: 14px;
+          border: 1px solid var(--app-light-grey);
+          border-radius: var(--app-border-radius);
+          font-size: 17px;
+          line-height: 1.6;
+          font-family: var(--primary-font-family);
+          background: #fff;
+          white-space: pre-wrap;
+          word-break: break-word;
+        }
+        .editor:focus {
+          outline: none;
+          border-color: var(--app-primary-color);
+        }
+        .tok.fixed {
+          text-decoration: underline;
+          text-decoration-color: #1a7f37;
+          text-decoration-thickness: 2px;
+          text-underline-offset: 2px;
+          cursor: pointer;
+        }
+        .tok.suspect {
+          text-decoration: underline dotted;
+          text-decoration-color: #d1242f;
+          text-decoration-thickness: 2px;
+          text-underline-offset: 2px;
+          background: rgba(255, 129, 130, 0.18);
+          border-radius: 3px;
+          cursor: pointer;
+        }
+        .tok.suspect.active {
+          background: rgba(255, 213, 0, 0.45);
+        }
+
+        /* Correction panel */
+        .correct-panel {
+          border: 1px solid var(--app-light-grey);
+          border-radius: var(--app-border-radius);
+          padding: 10px 12px;
+          background: #fafafa;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .correct-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          font-size: 14px;
+          color: var(--app-grey);
+        }
+        .icon-btn.dark {
+          color: var(--app-grey);
+          font-size: 15px;
+        }
+        .suggest-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .chip {
+          padding: 8px 12px;
+          border: 1px solid var(--app-light-grey);
+          border-radius: 999px;
+          background: #fff;
+          font-size: 15px;
+          color: var(--app-black, #111);
+        }
+        .chip:active {
+          transform: scale(0.96);
+        }
+        .chip.keep {
+          border-style: dashed;
+          color: var(--app-grey);
         }
         .result-actions {
           display: flex;
